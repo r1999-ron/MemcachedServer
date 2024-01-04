@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -27,6 +28,7 @@ public class MemcacheServer {
     private final Lock cacheLock = new ReentrantLock();
     private final ExecutorService executorService = Executors.newCachedThreadPool();
     private ServerSocket serverSocket;
+    private volatile boolean isShuttingDown = false;
 
     /**
      * Constructs a MemcacheServer with the specified port.
@@ -48,13 +50,21 @@ public class MemcacheServer {
             serverSocket = new ServerSocket(port);
             System.out.println("Memcached server is listening on port " + port);
 
-            while (true) {
+            while (!isShuttingDown) {
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("Client Connected");
-                executorService.submit(() -> handleClient(clientSocket));
+                if (!isShuttingDown) {
+                    System.out.println("Client Connected");
+                    executorService.submit(() -> handleClient(clientSocket));
+                } else {
+                    clientSocket.close();
+                }
+
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            if (!isShuttingDown) {
+                e.printStackTrace();
+            }
+
         } finally {
             shutdown();
         }
@@ -114,13 +124,28 @@ public class MemcacheServer {
     }
 
     private void shutdown() {
-        try {
-            executorService.shutdownNow(); // Shut down the ExecutorService
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close(); // Close the serverSocket
+        if (!isShuttingDown) {
+            isShuttingDown = true;
+            System.out.println("Shutting down the Memcached Server gracefully...");
+            try {
+                // stop accepting new requests
+                if (serverSocket != null && !serverSocket.isClosed()) {
+                    serverSocket.close(); // Close the serverSocket
+                }
+                // Allow ongoing requests to complete
+                executorService.shutdownNow();
+                // Optionally wait for some time for ongoing requests to complete
+                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    // forcefully terminate if waiting tasks takes too long
+                    executorService.shutdownNow();
+                }
+                // Additional cleanup tasks if needed
+                System.out.println("Memcached Server shutdown completed");
+
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+
             }
-        } catch (IOException e) {
-            e.printStackTrace();
         }
     }
 
@@ -132,9 +157,18 @@ public class MemcacheServer {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
                 int byteCount = Integer.parseInt(tokens[4]);
-                char[] valueBuffer = new char[byteCount];
-                reader.read(valueBuffer, 0, byteCount);
-                String value = new String(valueBuffer);
+                StringBuilder valueBuilder = new StringBuilder();
+                for (int i = 0; i < byteCount; i++) {
+                    int charCode = reader.read();
+                    if (charCode == -1) {
+                        break;
+                    }
+                    valueBuilder.append((char) charCode);
+                }
+                // Consume newLine characters
+                reader.readLine();
+
+                String value = valueBuilder.toString().trim();
 
                 CacheEntry entry = new CacheEntry(value, flags, exptime);
                 cache.put(key, entry);
@@ -155,9 +189,18 @@ public class MemcacheServer {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
                 int byteCount = Integer.parseInt(tokens[4]);
-                char[] valueBuffer = new char[byteCount];
-                reader.read(valueBuffer, 0, byteCount);
-                String value = new String(valueBuffer);
+                StringBuilder valueBuilder = new StringBuilder();
+                for (int i = 0; i < byteCount; i++) {
+                    int charCode = reader.read();
+                    if (charCode == -1) {
+                        break;
+                    }
+                    valueBuilder.append((char) charCode);
+                }
+                // Consume newLine characters
+                reader.readLine();
+
+                String value = valueBuilder.toString().trim();
                 if (cache.size() >= maxCacheSize) {
                     evictOldestEntry();
                 }
@@ -180,9 +223,17 @@ public class MemcacheServer {
             int flags = Integer.parseInt(tokens[2]);
             int exptime = Integer.parseInt(tokens[3]);
             int byteCount = Integer.parseInt(tokens[4]);
-            char[] valueBuffer = new char[byteCount];
-            reader.read(valueBuffer, 0, byteCount);
-            String value = new String(valueBuffer);
+            StringBuilder valueBuilder = new StringBuilder();
+            for (int i = 0; i < byteCount; i++) {
+                int charCode = reader.read();
+                if (charCode == -1) {
+                    break;
+                }
+                valueBuilder.append((char) charCode);
+            }
+            // Consume newLine characters
+            reader.readLine();
+            String value = valueBuilder.toString().trim(); // Trim to remove leading/trailing whitespaces
 
             if (cache.size() >= maxCacheSize) {
                 evictOldestEntry();
@@ -218,9 +269,17 @@ public class MemcacheServer {
         try {
             String key = tokens[1];
             int byteCount = Integer.parseInt(tokens[4]);
-            char[] valueBuffer = new char[byteCount];
-            reader.read(valueBuffer, 0, byteCount);
-            String value = new String(valueBuffer);
+            StringBuilder valueBuilder = new StringBuilder();
+            for (int i = 0; i < byteCount; i++) {
+                int charCode = reader.read();
+                if (charCode == -1) {
+                    break;
+                }
+                valueBuilder.append((char) charCode);
+            }
+            // Consume newLine characters
+            reader.readLine();
+            String value = valueBuilder.toString().trim();
 
             if (cache.containsKey(key)) {
                 CacheEntry entry = cache.get(key);
@@ -244,10 +303,17 @@ public class MemcacheServer {
             String key = tokens[1];
             long casUnique = Long.parseLong(tokens[5]);
             int byteCount = Integer.parseInt(tokens[6]);
-            char[] valueBuffer = new char[byteCount];
-            reader.read(valueBuffer, 0, byteCount);
-            String value = new String(valueBuffer);
-
+            StringBuilder valueBuilder = new StringBuilder();
+            for (int i = 0; i < byteCount; i++) {
+                int charCode = reader.read();
+                if (charCode == -1) {
+                    break;
+                }
+                valueBuilder.append((char) charCode);
+            }
+            // Consume newLine characters
+            reader.readLine();
+            String value = valueBuilder.toString().trim();
             if (cache.containsKey(key) && cache.get(key).getCasUnique() == casUnique) {
                 CacheEntry entry = cache.get(key);
                 entry.setValue(value);
@@ -297,25 +363,25 @@ public class MemcacheServer {
 
     private void evictOldestEntry() {
         cacheLock.lock();
-        try{
-        String oldestKey = null;
-        long oldestTime = Long.MAX_VALUE;
+        try {
+            String oldestKey = null;
+            long oldestTime = Long.MAX_VALUE;
 
-        for (Map.Entry<String, CacheEntry> entry : cache.entrySet()) {
-            if (entry.getValue().getCreationTime() < oldestTime) {
-                oldestTime = entry.getValue().getCreationTime();
-                oldestKey = entry.getKey();
+            for (Map.Entry<String, CacheEntry> entry : cache.entrySet()) {
+                if (entry.getValue().getCreationTime() < oldestTime) {
+                    oldestTime = entry.getValue().getCreationTime();
+                    oldestKey = entry.getKey();
+                }
             }
-        }
 
-        if (oldestKey != null) {
-            cache.remove(oldestKey);
-        }
-    }finally{
-      cacheLock.unlock();
+            if (oldestKey != null) {
+                cache.remove(oldestKey);
+            }
+        } finally {
+            cacheLock.unlock();
 
+        }
     }
-}
 
     /**
      * Represents a cache entry in the Memcached server.
@@ -364,6 +430,7 @@ public class MemcacheServer {
         public long getCreationTime() {
             return creationTime;
         }
+
     }
 
     /**
@@ -372,7 +439,8 @@ public class MemcacheServer {
      * @param args Command line arguments (not used in this example).
      */
     public static void main(String[] args) {
-        MemcacheServer memcachedServer = new MemcacheServer(11211);
+        int port = 11211;
+        MemcacheServer memcachedServer = new MemcacheServer(port);
         memcachedServer.startServer();
     }
 }
