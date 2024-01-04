@@ -1,4 +1,4 @@
-## Memcache Server
+# Memcache Server
 Memcache Server is a Java implementation of a lightweight and concurrent Memcached server. This server provides a caching solution for key-value pairs, supporting essential Memcached commands such as SET, GET, ADD, REPLACE, CAS, DELETE, INCREMENT, DECREMENT, APPEND, and PREPEND.
 
 # Features
@@ -10,8 +10,6 @@ Memcache Server is a Java implementation of a lightweight and concurrent Memcach
 
 ## Getting Started
 Clone the Repository:
-
-bash
 Copy code
 git clone <repository-url>
 
