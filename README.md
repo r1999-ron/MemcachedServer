@@ -10,14 +10,14 @@ Memcache Server is a Java implementation of a lightweight and concurrent Memcach
 
 ## Getting Started
 Clone the Repository:
-Copy code
-git clone <repository-url>
+ * Copy code
+ * git clone <repository-url>
 
 ## Run the Server:
 Copy code
-cd memcache-server
-javac MemcacheServer.java
-java MemcacheServer
+* cd memcache-server
+* javac MemcacheServer.java
+* java MemcacheServer
 
 # Connect with Telnet:
 Use Telnet or a Memcached client to interact with the server and test various commands.
