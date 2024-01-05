@@ -1,5 +1,6 @@
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
@@ -11,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.IntStream;
 
 /**
  * MemcacheServer is a simple implementation of a Memcached server.
@@ -160,18 +162,7 @@ public class MemcacheServer {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
                 int byteCount = Integer.parseInt(tokens[4]);
-                StringBuilder valueBuilder = new StringBuilder();
-                for (int i = 0; i < byteCount; i++) {
-                    int charCode = reader.read();
-                    if (charCode == -1) {
-                        break;
-                    }
-                    valueBuilder.append((char) charCode);
-                }
-                // Consume newLine characters
-                reader.readLine();
-
-                String value = valueBuilder.toString().trim();
+                String value = readValueFromInputStream(reader, byteCount);
 
                 CacheEntry entry = new CacheEntry(value, flags, exptime);
                 cache.put(key, entry);
@@ -184,6 +175,24 @@ public class MemcacheServer {
         }
     }
 
+    private String readValueFromInputStream(BufferedReader reader, int byteCount) throws IOException {
+        String value = IntStream.range(0, byteCount).mapToObj(i -> {
+            try {
+                int charCode = reader.read();
+                if (charCode == -1) {
+                    throw new IOException("Unexpected end of input stream");
+                }
+                return (char) charCode;
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        })
+                .collect(StringBuilder::new, StringBuilder::append, StringBuilder::append)
+                .toString();
+        reader.readLine();
+        return value.trim();
+    }
+
     private void handleAdd(String[] tokens, BufferedReader reader, PrintWriter writer) throws IOException {
         cacheLock.lock();
         try {
@@ -192,18 +201,7 @@ public class MemcacheServer {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
                 int byteCount = Integer.parseInt(tokens[4]);
-                StringBuilder valueBuilder = new StringBuilder();
-                for (int i = 0; i < byteCount; i++) {
-                    int charCode = reader.read();
-                    if (charCode == -1) {
-                        break;
-                    }
-                    valueBuilder.append((char) charCode);
-                }
-                // Consume newLine characters
-                reader.readLine();
-
-                String value = valueBuilder.toString().trim();
+                String value = readValueFromInputStream(reader, byteCount);
                 if (cache.size() >= maxCacheSize) {
                     evictOldestEntry();
                 }
@@ -226,17 +224,7 @@ public class MemcacheServer {
             int flags = Integer.parseInt(tokens[2]);
             int exptime = Integer.parseInt(tokens[3]);
             int byteCount = Integer.parseInt(tokens[4]);
-            StringBuilder valueBuilder = new StringBuilder();
-            for (int i = 0; i < byteCount; i++) {
-                int charCode = reader.read();
-                if (charCode == -1) {
-                    break;
-                }
-                valueBuilder.append((char) charCode);
-            }
-            // Consume newLine characters
-            reader.readLine();
-            String value = valueBuilder.toString().trim(); // Trim to remove leading/trailing whitespaces
+            String value = readValueFromInputStream(reader, byteCount);
 
             if (cache.size() >= maxCacheSize) {
                 evictOldestEntry();
@@ -272,17 +260,7 @@ public class MemcacheServer {
         try {
             String key = tokens[1];
             int byteCount = Integer.parseInt(tokens[4]);
-            StringBuilder valueBuilder = new StringBuilder();
-            for (int i = 0; i < byteCount; i++) {
-                int charCode = reader.read();
-                if (charCode == -1) {
-                    break;
-                }
-                valueBuilder.append((char) charCode);
-            }
-            // Consume newLine characters
-            reader.readLine();
-            String value = valueBuilder.toString().trim();
+            String value = readValueFromInputStream(reader, byteCount);
 
             if (cache.containsKey(key)) {
                 CacheEntry entry = cache.get(key);
@@ -306,17 +284,7 @@ public class MemcacheServer {
             String key = tokens[1];
             long casUnique = Long.parseLong(tokens[5]);
             int byteCount = Integer.parseInt(tokens[6]);
-            StringBuilder valueBuilder = new StringBuilder();
-            for (int i = 0; i < byteCount; i++) {
-                int charCode = reader.read();
-                if (charCode == -1) {
-                    break;
-                }
-                valueBuilder.append((char) charCode);
-            }
-            // Consume newLine characters
-            reader.readLine();
-            String value = valueBuilder.toString().trim();
+            String value = readValueFromInputStream(reader, byteCount);
             if (cache.containsKey(key) && cache.get(key).getCasUnique() == casUnique) {
                 CacheEntry entry = cache.get(key);
                 entry.setValue(value);
@@ -442,7 +410,7 @@ public class MemcacheServer {
      * @param args Command line arguments (not used in this example).
      */
     public static void main(String[] args) {
-        int port = 11211;
+        int port = ServerConfig.INSTANCE.getPort();
         MemcacheServer memcachedServer = new MemcacheServer(port);
         memcachedServer.startServer();
     }
