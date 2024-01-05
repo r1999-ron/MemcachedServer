@@ -74,8 +74,11 @@ public class MemcacheServer {
         try (
                 BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
+            // Print client address
+            System.out.println("Client Address: " + clientSocket.getInetAddress());
             String request = reader.readLine();
             if (request != null && !request.isEmpty()) {
+                System.out.println("Received request: " + request);
                 String[] tokens = request.split(" ");
                 String command = tokens[0].toLowerCase();
 
