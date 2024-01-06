@@ -1,18 +1,14 @@
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.IntStream;
 
 /**
  * MemcacheServer is a simple implementation of a Memcached server.
@@ -26,11 +22,11 @@ public class MemcacheServer {
 
     private final int port;
     private Map<String, CacheEntry> cache;
-    private int maxCacheSize = 100; // Maximum cache size
+    private final int maxCacheSize = 100; // Maximum cache size
     private final Lock cacheLock = new ReentrantLock();
     private final ExecutorService executorService = Executors.newCachedThreadPool();
     private ServerSocket serverSocket;
-    private volatile boolean isShuttingDown = false;
+    private boolean isShuttingDown = false;
 
     /**
      * Constructs a MemcacheServer with the specified port.
@@ -40,7 +36,7 @@ public class MemcacheServer {
      */
     public MemcacheServer(int port) {
         this.port = port;
-        this.cache = new HashMap<>();
+        this.cache = new LinkedHashMap<>(maxCacheSize, 0.75f, true); // LRU Cache
     }
 
     /**
@@ -130,34 +126,32 @@ public class MemcacheServer {
 
     private void shutdown() {
         if (!isShuttingDown) {
-            isShuttingDown = true;
-            System.out.println("Shutting down the Memcached Server gracefully...");
             try {
+                isShuttingDown = true;
+                System.out.println("Shutting down the Memcached Server gracefully...");
                 // stop accepting new requests
                 if (serverSocket != null && !serverSocket.isClosed()) {
                     serverSocket.close(); // Close the serverSocket
                 }
                 // Allow ongoing requests to complete
-                executorService.shutdownNow();
+                executorService.shutdown();
                 // Optionally wait for some time for ongoing requests to complete
                 if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                    // forcefully terminate if waiting tasks takes too long
+                    // forcefully terminate if waiting tasks take too long
                     executorService.shutdownNow();
                 }
                 // Additional cleanup tasks if needed
                 System.out.println("Memcached Server shutdown completed");
-
             } catch (IOException | InterruptedException e) {
                 e.printStackTrace();
-
             }
         }
     }
 
-    private void handleReplace(String[] tokens, BufferedReader reader, PrintWriter writer) throws IOException {
+    private void handleReplace(String[] tokens, BufferedReader reader, PrintWriter writer) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             if (cache.containsKey(key)) {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
@@ -170,33 +164,30 @@ public class MemcacheServer {
             } else {
                 writer.println("NOT_STORED");
             }
+        } catch (IOException e) {
+            e.printStackTrace();
         } finally {
             cacheLock.unlock();
         }
     }
 
     private String readValueFromInputStream(BufferedReader reader, int byteCount) throws IOException {
-        String value = IntStream.range(0, byteCount).mapToObj(i -> {
-            try {
-                int charCode = reader.read();
-                if (charCode == -1) {
-                    throw new IOException("Unexpected end of input stream");
-                }
-                return (char) charCode;
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        StringBuilder value = new StringBuilder();
+        for (int i = 0; i < byteCount; i++) {
+            int charCode = reader.read();
+            if (charCode == -1) {
+                throw new IOException("Unexpected end of input stream");
             }
-        })
-                .collect(StringBuilder::new, StringBuilder::append, StringBuilder::append)
-                .toString();
-        reader.readLine();
-        return value.trim();
+            value.append((char) charCode);
+        }
+        reader.readLine(); // Read and discard the trailing newline
+        return value.toString().trim();
     }
 
-    private void handleAdd(String[] tokens, BufferedReader reader, PrintWriter writer) throws IOException {
+    private void handleAdd(String[] tokens, BufferedReader reader, PrintWriter writer) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             if (!cache.containsKey(key)) {
                 int flags = Integer.parseInt(tokens[2]);
                 int exptime = Integer.parseInt(tokens[3]);
@@ -212,15 +203,17 @@ public class MemcacheServer {
             } else {
                 writer.println("NOT_STORED");
             }
+        } catch (IOException e) {
+            e.printStackTrace();
         } finally {
             cacheLock.unlock();
         }
     }
 
-    private void handleSet(String[] tokens, BufferedReader reader) throws IOException {
+    private void handleSet(String[] tokens, BufferedReader reader) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             int flags = Integer.parseInt(tokens[2]);
             int exptime = Integer.parseInt(tokens[3]);
             int byteCount = Integer.parseInt(tokens[4]);
@@ -232,15 +225,17 @@ public class MemcacheServer {
 
             CacheEntry entry = new CacheEntry(value, flags, exptime);
             cache.put(key, entry);
+        } catch (IOException e) {
+            e.printStackTrace();
         } finally {
             cacheLock.unlock();
         }
     }
 
     private void handleGet(String[] tokens, PrintWriter writer) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             if (cache.containsKey(key)) {
                 CacheEntry entry = cache.get(key);
                 writer.println("VALUE " + key + " " + entry.getFlags() + " " + entry.getValue().length());
@@ -254,34 +249,35 @@ public class MemcacheServer {
         }
     }
 
-    private void handleAppendPrepend(String[] tokens, BufferedReader reader, PrintWriter writer, String command)
-            throws IOException {
+    private void handleAppendPrepend(String[] tokens, BufferedReader reader, PrintWriter writer, String command) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
-            int byteCount = Integer.parseInt(tokens[4]);
-            String value = readValueFromInputStream(reader, byteCount);
-
             if (cache.containsKey(key)) {
                 CacheEntry entry = cache.get(key);
+                int byteCount = Integer.parseInt(tokens[4]);
+                String value = readValueFromInputStream(reader, byteCount);
+
                 if (command.equals("append")) {
                     entry.setValue(entry.getValue() + value);
-                } else { // prepend
+                } else {
                     entry.setValue(value + entry.getValue());
                 }
                 writer.println("STORED");
             } else {
                 writer.println("NOT_STORED");
             }
+        } catch (IOException e) {
+            e.printStackTrace();
         } finally {
             cacheLock.unlock();
         }
     }
 
-    private void handleCas(String[] tokens, BufferedReader reader, PrintWriter writer) throws IOException {
+    private void handleCas(String[] tokens, BufferedReader reader, PrintWriter writer) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             long casUnique = Long.parseLong(tokens[5]);
             int byteCount = Integer.parseInt(tokens[6]);
             String value = readValueFromInputStream(reader, byteCount);
@@ -292,15 +288,17 @@ public class MemcacheServer {
             } else {
                 writer.println("EXISTS");
             }
+        } catch (IOException e) {
+            e.printStackTrace();
         } finally {
             cacheLock.unlock();
         }
     }
 
     private void handleDelete(String[] tokens, PrintWriter writer) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
             if (cache.containsKey(key)) {
                 cache.remove(key);
                 writer.println("DELETED");
@@ -313,13 +311,13 @@ public class MemcacheServer {
     }
 
     private void handleIncrementDecrement(String[] tokens, PrintWriter writer, String command) {
+        String key = tokens[1];
         cacheLock.lock();
         try {
-            String key = tokens[1];
-            int incrementValue = Integer.parseInt(tokens[2]);
-
             if (cache.containsKey(key)) {
                 CacheEntry entry = cache.get(key);
+                int incrementValue = Integer.parseInt(tokens[2]);
+
                 int oldValue = Integer.parseInt(entry.getValue());
                 int newValue = (command.equals("increment")) ? oldValue + incrementValue : oldValue - incrementValue;
                 entry.setValue(Integer.toString(newValue));
@@ -333,25 +331,8 @@ public class MemcacheServer {
     }
 
     private void evictOldestEntry() {
-        cacheLock.lock();
-        try {
-            String oldestKey = null;
-            long oldestTime = Long.MAX_VALUE;
-
-            for (Map.Entry<String, CacheEntry> entry : cache.entrySet()) {
-                if (entry.getValue().getCreationTime() < oldestTime) {
-                    oldestTime = entry.getValue().getCreationTime();
-                    oldestKey = entry.getKey();
-                }
-            }
-
-            if (oldestKey != null) {
-                cache.remove(oldestKey);
-            }
-        } finally {
-            cacheLock.unlock();
-
-        }
+        String oldestKey = cache.entrySet().iterator().next().getKey();
+        cache.remove(oldestKey);
     }
 
     /**
@@ -362,10 +343,10 @@ public class MemcacheServer {
      */
     private static class CacheEntry {
         private String value;
-        private int flags;
-        private int exptime;
-        private long casUnique;
-        private long creationTime;
+        private final int flags;
+        private final int exptime;
+        private final long casUnique;
+        private final long creationTime;
 
         /**
          * Constructs a CacheEntry with the specified value, flags, and expiration time.
@@ -401,7 +382,6 @@ public class MemcacheServer {
         public long getCreationTime() {
             return creationTime;
         }
-
     }
 
     /**
