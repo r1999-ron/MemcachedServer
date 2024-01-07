@@ -384,14 +384,25 @@ public class MemcacheServer {
         }
     }
 
-    /**
+     /**
      * Main method to start the Memcached server.
      *
      * @param args Command line arguments (not used in this example).
+     * @throws IOException
      */
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         int port = ServerConfig.INSTANCE.getPort();
+        if (args.length > 0 && args[0].equals("-p") && args.length > 1) {
+            try {
+                // Parsing the port number from the command line
+                port = Integer.parseInt(args[1]);
+
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid port number. Using the default port: " + port);
+            }
+        }
         MemcacheServer memcachedServer = new MemcacheServer(port);
         memcachedServer.startServer();
     }
+}
 }
