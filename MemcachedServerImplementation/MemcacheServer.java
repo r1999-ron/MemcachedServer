@@ -86,11 +86,14 @@ public class MemcacheServer {
                 System.out.println("Received request: " + request);
                 String[] tokens = request.split(" ");
                 String command = tokens[0].toLowerCase();
+                boolean noReply = tokens.length > 5 && tokens[5].equalsIgnoreCase("noreply");
 
                 switch (command) {
                     case "set":
                         handleSet(tokens, reader);
-                        writer.println("STORED");
+                       if (!noReply) {
+                            writer.println("STORED");
+                        }
                         break;
                     case "get":
                         handleGet(tokens, writer);
